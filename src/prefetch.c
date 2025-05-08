@@ -7,7 +7,7 @@
 // Implementation in C 
 
 // The paper defines a length of the window. By default, we use 64
-#define LENGTH 8
+#define LENGTH 16
 // We need to define a packet size. For DRAM systems, it has be the same as a
 // cache line size. This is in BYTES!
 #define PKT_SIZE 8
@@ -16,13 +16,15 @@
 // back to an random-like pattern. The stride pattern continues until
 // LADDER_LENGTH - 1 packets and then it drops before rising.
 #define LADDER_LENGTH 4
+// The ladder can have different lengths too!
+
 // The pattern drops. See the graph from the paper. this is in bytes
 #define LADDER_DROP_SIZE 8
 // The pattern resumes after a certain interval.
 #define LADDER_INTERVAL 1
 // Ladder also needs to have the rise. After 10 packets, the 11th packet will
 // see this jump. this is in bytes.
-#define LADDER_RISE 16
+#define LADDER_RISE 13
 
 // To generate traffic, we need a base address to start with. When these
 // addresses are fed into a memory simulator, the address decoding can be seen
@@ -67,13 +69,13 @@ int create_ladder(int index) {
     int this_ladder_index = index % LADDER_LENGTH;
     // find the amount of data processed by the traffic generator.
    
-    // until LADDER_LENGTH - 1, there will be a const stride.
+    // until LADDER_LENGTH - 1, there will be a const stride. Not necessarily!
     if (this_ladder_index == 0) {
         // this is a rise
         processed_ladder += LADDER_RISE;
     }
     else if ((this_ladder_index > 0) && (this_ladder_index < (LADDER_LENGTH - 1))) {
-        processed_ladder += PKT_SIZE;
+        processed_ladder += (PKT_SIZE + this_ladder_index);
     }
     // If this is drop
     else if (this_ladder_index == (LADDER_LENGTH - 1)) {
@@ -112,6 +114,7 @@ int generate_traffic(int index, char *traffic_type, bool verbose) {
 
 // get the most dominant stride
 int most_dominating_stride() {
+    // This is incorrect!
     /* AI generated utility function. Was to lazy to write this */
     int maxCount = 0;
     int mostFrequent = stride_history[0];
@@ -128,7 +131,8 @@ int most_dominating_stride() {
             mostFrequent = stride_history[i];
         }
     }
-    if (maxCount > LENGTH / 2)
+    // Stride history is counted in LENGTH - 1 size
+    if (maxCount > ((LENGTH - 1) / 2))
         return mostFrequent;
     else
         // There is no domaning stride!
@@ -168,7 +172,7 @@ struct prefetcher _ladder(int vpn_a, int stride_a, int pid_a, int *access_histor
      *
      * :param vpn_a: Virtual Page Number of the current access must be the one
      *              at the end of the window?? super confusing.
-     * :param stride_a: Stride of the current access.
+     * :param stride_a: Stride of the current access i.e. vpn_a - last_vpn_a.
      * :param pid_a: The process ID of the current process (ignored).
      * :param *vpn_history: The array of prior vpn history
      * :param *stride_history: The array of prior strides
@@ -177,6 +181,7 @@ struct prefetcher _ladder(int vpn_a, int stride_a, int pid_a, int *access_histor
      */
     struct prefetcher output;
 
+    // calculate stride_A
     int pattern_target[2];
     pattern_target[0] = stride_history[LENGTH - 2];
     pattern_target[1] = stride_a;
@@ -248,15 +253,17 @@ int main() {
         if ((i % LENGTH == 0) && (i != 0)) {
 
             // TODO add verbose options to not print everything everytime!
+            if (verbose == true)
                 printf("\t == stats for window %d\n", window++);
+
             if (verbose == true) {
                 printf(" stride_history: ");
                 for (int i = 0 ; i < LENGTH - 1; i++) {
-                    printf("%d ", stride_history[i]);
+                    printf("%d\t", stride_history[i]);
                 }
                 printf("\n access_history: ");
                 for (int i = 0 ; i < LENGTH ; i++) {
-                    printf("%d ", access_history[i]);
+                    printf("%d\t", access_history[i]);
                 }
             printf("\n");
             }
@@ -267,6 +274,7 @@ int main() {
             // i think we need to separate out hot pages here! from the window?
             // struct hot_pages = get_hot_pages(int window);
             struct prefetcher results = _dominator();
+
             if (results.stride_target != -1) {
                 // There is a dominating stride!
                 // TODO What do I do with it?
@@ -276,8 +284,21 @@ int main() {
                 printf("no dom stride found!\n");
                 // there was no dominating pattern found! try the ladder
                 // prefetcher now!
-                results = _ladder(addr, stride_history[LENGTH - 1], 0, access_history, stride_history);
-                printf("ladder: %d %d\n", results.stride_target, results.pattern_target);
+                // need to calculate the current stride. 
+                // TODO: Remove this line when we all understand this!
+                int stride_a = addr - access_history[LENGTH - 1];
+
+                results = _ladder(
+                        addr, stride_a, 0, access_history, stride_history);
+
+                // now make sure to prefetch the addresses
+                // as per the paper, this is given by:
+                // addr = vpn_a + stride_target + i * pattern_stride
+
+                printf("ladder: %d %d next_addr: %d\n", results.stride_target,
+                        results.pattern_target, addr + results.stride_target +
+                        results.pattern_target);
+                
             }            
         }
     }
