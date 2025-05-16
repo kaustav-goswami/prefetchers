@@ -10,7 +10,7 @@
 #define LENGTH 16
 // We need to define a packet size. For DRAM systems, it has be the same as a
 // cache line size. This is in BYTES!
-#define PKT_SIZE 8
+#define PKT_SIZE 16
 
 // For ladder traffic, there is a stride for a couple of addresses before going
 // back to an random-like pattern. The stride pattern continues until
@@ -31,6 +31,9 @@
 // in details.
 #define BASE_ADDR 0x0
 
+// We need to define the prefetcher depth
+#define PREFETCHER_DEPTH 1
+
 // We need a global structure that maintains the ladder traffic index
 // generators
 int processed_ladder = BASE_ADDR;
@@ -40,7 +43,15 @@ int access_history[LENGTH];
 int stride_history[LENGTH];
 
 // A prefetcher algorithm returns a stride pattern
+// The prefetcher struct stores a valid bit to indicate if the results are
+// valid or not.
+// As per the ladder and ripple algorithms, it returns a stride_target and
+// pattern_target.
+// This should be oblivious to the prefetcher engine as it should only receive
+// a target address or a set of target addresses to prefetch depending on the
+// depth of the prefetcher engine.
 struct prefetcher {
+    bool valid;
     int stride_target;
     int pattern_target;
 };
@@ -51,8 +62,6 @@ void fatal(char *reason) {
     exit(-1);
 }
 
-// We need to implement a STT. This
-//
 // Now we need to define a linear address stream.
 int create_linear(int index) {
     /* this function generates linear traffic by adding index * packet_size
@@ -220,6 +229,53 @@ struct prefetcher _ladder(int vpn_a, int stride_a, int pid_a, int *access_histor
 
 }
 
+struct prefetcher _ripple(int vpn_a, int stride_a, int pid_a, int *access_history, int *stride_history) {
+    /* Implementation based on the HoPP paper.
+     *
+     * :param vpn_a: Virtual Page Number of the current access must be the one
+     *              at the end of the window?? super confusing.
+     * :param stride_a: Stride of the current access i.e. vpn_a - last_vpn_a.
+     * :param pid_a: The process ID of the current process (ignored).
+     * :param *vpn_history: The array of prior vpn history
+     * :param *stride_history: The array of prior strides
+     * 
+     * @returns :struct prefetcher output:
+     */
+    struct prefetcher output;
+
+    int max_stride = 2;
+    int ripple_num = 0;
+    int accumulate_stride = 0;
+
+    if (abs(stride_a) <= max_stride) {
+        ripple_num++;
+        accumulate_stride = 0;
+    }
+
+    for (int i = LENGTH - 2 ; i >= 0; i-- ) {
+        accumulate_stride += stride_history[i];
+        if (abs(accumulate_stride) <= max_stride) {
+            ripple_num++;
+            accumulate_stride = 0;
+        }
+    }
+    output.pattern_target = 0;
+
+    // make sure to return the right address. Okay, we need an invalid address
+    // marker!
+    if (ripple_num >= LENGTH/2) {
+        output.valid = true;
+        output.stride_target = 1;
+    }
+    // a stride was not found!
+    else {
+        // return zeros pretty much!
+        output.valid = false;
+        output.stride_target = 0;
+    }
+    return output;
+}
+                
 int main() {
     // I need a duration to run!
    
